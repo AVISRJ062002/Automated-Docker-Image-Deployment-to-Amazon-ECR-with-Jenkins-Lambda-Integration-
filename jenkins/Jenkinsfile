@@ -1,0 +1,69 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'ap-south-1'
+        ECR_REPO = 'devops-ecr-pipeline-repo'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Checking out code...'
+                checkout scm
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.AWS_ACCOUNT_ID = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo 'Building Docker image...'
+                script {
+                    docker.build("${ECR_REPO}:${IMAGE_TAG}", "./app")
+                }
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                echo 'Logging into ECR...'
+                retry(3) {
+                    script {
+                        sh './scripts/ecr_login.sh'
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                echo 'Pushing image to ECR...'
+                retry(3) {
+                    script {
+                        docker.withRegistry("https://${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com") {
+                            docker.image("${ECR_REPO}:${IMAGE_TAG}").push()
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            steps {
+                echo 'Cleaning up local images...'
+                script {
+                    sh 'docker rmi ${ECR_REPO}:${IMAGE_TAG}'
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
