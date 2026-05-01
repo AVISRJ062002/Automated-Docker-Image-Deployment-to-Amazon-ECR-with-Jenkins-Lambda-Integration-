@@ -51,7 +51,7 @@ pipeline {
                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                 ]]) {
                     retry(3) {
-                        sh './scripts/ecr_login.sh'
+                        sh 'bash ./scripts/ecr_login.sh'
                     }
                 }
             }
