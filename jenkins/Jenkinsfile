@@ -13,7 +13,21 @@ pipeline {
                 checkout scm
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.AWS_ACCOUNT_ID = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+                }
+            }
+        }
+
+        stage('Resolve AWS Account') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    credentialsId: 'aws-creds',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    script {
+                        env.AWS_ACCOUNT_ID = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+                    }
                 }
             }
         }
@@ -30,8 +44,13 @@ pipeline {
         stage('Login to ECR') {
             steps {
                 echo 'Logging into ECR...'
-                retry(3) {
-                    script {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    credentialsId: 'aws-creds',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    retry(3) {
                         sh './scripts/ecr_login.sh'
                     }
                 }
@@ -41,12 +60,35 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 echo 'Pushing image to ECR...'
+                script {
+                    env.ECR_IMAGE = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+                }
                 retry(3) {
-                    script {
-                        docker.withRegistry("https://${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com") {
-                            docker.image("${ECR_REPO}:${IMAGE_TAG}").push()
-                        }
-                    }
+                    sh '''
+                        docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_IMAGE}
+                        docker push ${ECR_IMAGE}
+                    '''
+                }
+            }
+        }
+
+        stage('Verify ECR Image') {
+            steps {
+                echo 'Verifying pushed image in ECR...'
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    credentialsId: 'aws-creds',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh '''
+                        aws ecr describe-images \
+                          --region ${AWS_REGION} \
+                          --repository-name ${ECR_REPO} \
+                          --image-ids imageTag=${IMAGE_TAG} \
+                          --query 'imageDetails[0].imageDigest' \
+                          --output text
+                    '''
                 }
             }
         }
@@ -54,9 +96,10 @@ pipeline {
         stage('Cleanup') {
             steps {
                 echo 'Cleaning up local images...'
-                script {
-                    sh 'docker rmi ${ECR_REPO}:${IMAGE_TAG}'
-                }
+                sh '''
+                    docker rmi ${ECR_REPO}:${IMAGE_TAG} || true
+                    docker rmi ${ECR_IMAGE} || true
+                '''
             }
         }
     }
