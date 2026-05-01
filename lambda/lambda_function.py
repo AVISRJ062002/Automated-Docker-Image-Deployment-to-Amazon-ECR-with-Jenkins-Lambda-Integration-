@@ -17,8 +17,17 @@ def lambda_handler(event, context):
         repo_name = detail.get('repository-name')
         image_tag = detail.get('image-tag')
 
-        if not repo_name or not image_tag:
-            raise ValueError("Missing repository-name or image-tag in event")
+        if not repo_name:
+            raise ValueError("Missing repository-name in event")
+
+        # BuildKit can emit additional OCI artifact push events without a tag.
+        # Those events are not actionable for this workflow, so we skip them.
+        if not image_tag:
+            logger.info("Skipping untagged ECR event for repository %s", repo_name)
+            return {
+                'statusCode': 200,
+                'body': json.dumps('Skipped untagged ECR event')
+            }
 
         # Send SNS notification
         sns = boto3.client('sns')
