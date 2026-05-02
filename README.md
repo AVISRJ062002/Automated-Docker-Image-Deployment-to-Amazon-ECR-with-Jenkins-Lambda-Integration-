@@ -1,63 +1,74 @@
-# Automated Docker Image Deployment to Amazon ECR with Jenkins & Lambda using Terraform
+# Automated Docker Image Deployment to Amazon ECR with Jenkins, Lambda, and Terraform
 
 ## Project Overview
 
-This project implements a complete CI/CD pipeline that automates the deployment of Docker images to Amazon ECR, with event-driven notifications and logging using AWS Lambda, EventBridge, SNS, and DynamoDB.
+This project implements an end-to-end CI/CD workflow for a Dockerized Flask application. A push to the `main` branch starts a Jenkins pipeline that builds a Docker image, pushes it to Amazon ECR, and then relies on EventBridge to trigger Lambda for downstream notification and event logging.
+
+The target architecture for this repository is:
+
+`GitHub -> Jenkins -> Docker -> ECR -> EventBridge -> Lambda -> SNS -> DynamoDB`
 
 ## Architecture
 
-```
-GitHub Push → Jenkins → Docker Build → ECR Push → EventBridge → Lambda → SNS Notification & DynamoDB Log
+```mermaid
+flowchart LR
+    A[GitHub<br/>Push to main] --> B[Jenkins<br/>Pipeline: ecr-pipeline]
+    B --> C[Docker<br/>Build and tag image]
+    C --> D[Amazon ECR<br/>devops-ecr-pipeline-repo]
+    D --> E[Amazon EventBridge<br/>ecr-image-push-rule]
+    E --> F[AWS Lambda<br/>ecr-push-handler]
+    F --> G[Amazon SNS<br/>Email notification]
+    F --> H[Amazon DynamoDB<br/>ecr-events]
 ```
 
-### Components:
-- **Jenkins**: CI/CD server that builds and pushes Docker images
-- **Docker**: Containerizes the Flask application
-- **Amazon ECR**: Stores Docker images with scanning and lifecycle policies
-- **EventBridge**: Triggers on ECR image push events
-- **AWS Lambda**: Processes events, sends notifications, and logs to DynamoDB
-- **SNS**: Sends email notifications
-- **DynamoDB**: Stores event logs
-- **Terraform**: Infrastructure as Code for AWS resources
+### Component Responsibilities
+
+- `GitHub` stores the application and pipeline code and emits the webhook on push.
+- `Jenkins` checks out the repository, builds the container image, authenticates to ECR, and pushes the image.
+- `Docker` packages the Flask app from the `app/` directory.
+- `Amazon ECR` stores versioned images tagged with the Git commit SHA.
+- `Amazon EventBridge` listens for successful ECR image push events.
+- `AWS Lambda` filters the ECR event, sends an SNS notification, and writes an event record to DynamoDB.
+- `Amazon SNS` sends an email notification for the new image push.
+- `Amazon DynamoDB` stores a durable audit record of pushed images.
+- `Terraform` provisions the AWS resources that support the workflow.
 
 ## Tech Stack
 
-- **Infrastructure**: Terraform, AWS (ECR, Lambda, EventBridge, SNS, DynamoDB, IAM)
-- **CI/CD**: Jenkins, Docker
-- **Application**: Python Flask
-- **Scripting**: Bash
+| Layer | Tools and Services |
+| --- | --- |
+| Source control | GitHub |
+| CI/CD orchestration | Jenkins Pipeline, GitHub Webhooks |
+| Containerization | Docker |
+| Image registry | Amazon ECR |
+| Event routing | Amazon EventBridge |
+| Serverless processing | AWS Lambda, Python |
+| Notifications | Amazon SNS |
+| Event persistence | Amazon DynamoDB |
+| Infrastructure as code | Terraform |
+| Application | Flask |
 
-## Prerequisites
+## Setup Guide
 
-- AWS Account with appropriate permissions
-- Jenkins server with Docker and AWS CLI installed
-- GitHub repository
-- Terraform installed locally
-- AWS CLI configured with credentials
-
-## Setup Instructions
-
-### 1. Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd devops-ecr-pipeline
-```
-
-### 2. Configure AWS Credentials
-
-Ensure AWS CLI is configured:
+### 1. Clone the repository
 
 ```bash
-aws configure
+git clone https://github.com/AVISRJ062002/Automated-Docker-Image-Deployment-to-Amazon-ECR-with-Jenkins-Lambda-Integration-.git
+cd Automated-Docker-Image-Deployment-to-Amazon-ECR-with-Jenkins-Lambda-Integration-
 ```
 
-### 3. Update Variables
+### 2. Update project variables
 
-Edit `terraform/variables.tf` and update:
-- `email_subscription`: Your email for SNS notifications
+Edit `terraform/variables.tf` and review these values before deployment:
 
-### 4. Build Lambda Package
+- `aws_region`
+- `ecr_repo_name`
+- `lambda_function_name`
+- `sns_topic_name`
+- `dynamodb_table_name`
+- `email_subscription`
+
+### 3. Build the Lambda deployment package
 
 ```bash
 cd lambda
@@ -66,14 +77,16 @@ chmod +x build.sh
 cd ..
 ```
 
-### 5. Deploy Infrastructure
+### 4. Deploy the AWS resources
+
+Use the helper script:
 
 ```bash
 chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-Or manually:
+Or deploy manually with Terraform:
 
 ```bash
 cd terraform
@@ -82,144 +95,168 @@ terraform plan
 terraform apply
 ```
 
-### 5. Test Application Locally
+### 5. Prepare the Jenkins server
 
-Before deploying to AWS, test the Docker application locally:
+Install the following on the Jenkins host:
+
+- Docker
+- AWS CLI
+- Git
+
+Install these Jenkins plugins:
+
+- Git Plugin
+- Pipeline Plugin
+- Docker Pipeline Plugin
+- AWS Credentials Plugin
+- GitHub Integration Plugin
+
+Add an AWS credential in Jenkins with:
+
+- Type: `AWS Credentials`
+- Credentials ID: `aws-creds`
+
+The IAM user or role used by Jenkins should be able to authenticate to ECR and push images.
+
+### 6. Create the Jenkins pipeline job
+
+Create a Pipeline job with these settings:
+
+- Job name: `ecr-pipeline`
+- Definition: `Pipeline script from SCM`
+- SCM: `Git`
+- Repository URL: `https://github.com/AVISRJ062002/Automated-Docker-Image-Deployment-to-Amazon-ECR-with-Jenkins-Lambda-Integration-.git`
+- Branch specifier: `*/main`
+- Script path: `jenkins/Jenkinsfile`
+
+Enable the trigger:
+
+- `GitHub hook trigger for GITScm polling`
+
+### 7. Configure the GitHub webhook
+
+In the GitHub repository settings, add a webhook with:
+
+- Payload URL: `http://<jenkins-public-ip>:8080/github-webhook/`
+- Content type: `application/json`
+- Event: `Just the push event`
+
+### 8. Trigger the pipeline
+
+Push a commit to `main`:
 
 ```bash
-# Build and run the app
-chmod +x scripts/run_app.sh
-./scripts/run_app.sh
-
-# Visit http://localhost:5000 to verify "CI/CD Pipeline Working!"
+git commit --allow-empty -m "trigger pipeline"
+git push origin main
 ```
 
-### 6. Configure Jenkins
+### 9. Verify the deployment
 
-1. Install required plugins: Docker, AWS Credentials, Git
-2. Create a new pipeline job
-3. Configure SCM to point to your GitHub repo
-4. Set pipeline script from SCM, path: `jenkins/Jenkinsfile`
-5. Configure AWS credentials in Jenkins (use IAM user with ECR permissions)
-6. Ensure Jenkins agent has Docker installed and running
+Check the following after the build completes:
 
-### 7. Verify SNS Subscription
-
-Check your email and confirm the SNS subscription to receive notifications.
+- Jenkins console output shows repository checkout, Docker build, ECR login, and Docker push.
+- Amazon ECR contains a new image tag in `devops-ecr-pipeline-repo`.
+- CloudWatch logs for `ecr-push-handler` show the Lambda execution.
+- SNS sends the email notification.
+- DynamoDB receives a new item in the `ecr-events` table.
 
 ## Pipeline Flow
 
-1. **Code Push**: Developer pushes code to GitHub
-2. **Jenkins Trigger**: Jenkins detects changes and starts pipeline
-3. **Docker Build**: Builds Docker image from `app/` directory
-4. **Image Tagging**: Tags image with Git commit SHA
-5. **ECR Authentication**: Logs into ECR using AWS credentials
-6. **Image Push**: Pushes tagged image to ECR
-7. **EventBridge Trigger**: Detects successful push and triggers Lambda
-8. **Lambda Processing**:
-   - Extracts repository name and tag from event
-   - Sends SNS notification email
-   - Logs event details to DynamoDB
-9. **Cleanup**: Removes local Docker images
+1. A developer pushes code to the `main` branch in GitHub.
+2. GitHub sends a push event to the Jenkins webhook endpoint.
+3. Jenkins starts the `ecr-pipeline` job and checks out the repository.
+4. `jenkins/Jenkinsfile` reads the short Git commit SHA and uses it as the Docker image tag.
+5. Jenkins builds the application image from `app/Dockerfile`.
+6. Jenkins authenticates to Amazon ECR through `scripts/ecr_login.sh` and the `aws-creds` credential.
+7. Jenkins tags and pushes the image to `devops-ecr-pipeline-repo`.
+8. Amazon ECR emits an image push event to EventBridge.
+9. EventBridge invokes `lambda/lambda_function.py`.
+10. Lambda ignores untagged OCI artifact events, processes tagged image push events, publishes an SNS message, and stores the event payload in DynamoDB.
+11. Jenkins removes local Docker images and cleans the workspace.
 
-## Testing the Pipeline
+## Screenshots
 
-1. Make a change to the code (e.g., update `app/app.py`)
-2. Commit and push to GitHub
-3. Jenkins should automatically trigger the pipeline
-4. Monitor Jenkins console for build progress
-5. Verify in AWS Console:
-   - ECR: New image with commit SHA tag
-   - DynamoDB: New entry in `ecr-events` table
-   - Email: SNS notification received
+Store documentation screenshots in `docs/screenshots/README.md` using the filenames below:
 
-## File Structure
+- `docs/screenshots/jenkins-success-build.png` for a successful Jenkins pipeline run or console output
+- `docs/screenshots/ecr-image-pushed.png` for the ECR repository showing the latest pushed image tag
+- `docs/screenshots/lambda-cloudwatch-logs.png` for CloudWatch logs showing `SNS notification sent` and `Event stored in DynamoDB`
 
-```
-devops-ecr-pipeline/
-├── terraform/
-│   ├── main.tf          # AWS resources definition
-│   ├── variables.tf     # Configuration variables
-│   ├── outputs.tf       # Terraform outputs
-│   └── provider.tf      # AWS provider configuration
-├── app/
-│   ├── Dockerfile       # Docker image definition
-│   ├── requirements.txt # Python dependencies
-│   └── app.py           # Flask application
-├── lambda/
-│   ├── lambda_function.py # Lambda handler code
-│   ├── requirements.txt   # Lambda dependencies
-│   └── build.sh           # Build script for Lambda package
-├── jenkins/
-│   └── Jenkinsfile       # Jenkins pipeline definition
-├── scripts/
-│   ├── deploy.sh         # Terraform deployment script
-│   └── ecr_login.sh      # ECR login script
-└── README.md
-```
+Suggested captures:
 
-## Security Considerations
-
-- IAM roles use least privilege principles
-- No hardcoded credentials in code
-- Sensitive files excluded via .gitignore
-- ECR image scanning enabled
-- Lifecycle policies prevent unlimited image accumulation
+- Jenkins build history and console output
+- ECR repository image tags
+- Lambda CloudWatch log stream for the latest ECR event
 
 ## Troubleshooting
 
-### Jenkins Build Fails
-- Ensure Docker is installed and running on Jenkins agent
-- Verify AWS credentials are configured in Jenkins
-- Check ECR repository permissions
+### Jenkins job is not triggered by GitHub push
 
-### Lambda Not Triggering
-- Verify EventBridge rule is active
-- Check CloudWatch logs for Lambda errors
-- Ensure Lambda has necessary permissions
+- Confirm the repository webhook points to `http://<jenkins-public-ip>:8080/github-webhook/`.
+- Make sure the Jenkins job has `GitHub hook trigger for GITScm polling` enabled.
+- Verify the Jenkins root URL is configured correctly under `Manage Jenkins`.
 
-### SNS Email Not Received
-- Confirm email subscription is confirmed
-- Check SNS topic permissions
-- Verify Lambda environment variables
+### ECR authentication fails
 
-### Terraform Apply Fails
-- Ensure AWS credentials have sufficient permissions
-- Check region configuration
-- Verify variable values
+- Ensure the Jenkins host has the AWS CLI installed.
+- Confirm the Jenkins credential ID is exactly `aws-creds`.
+- Verify the AWS principal has permissions such as `ecr:GetAuthorizationToken`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, and `ecr:PutImage`.
 
-### ECR Login Issues in Jenkins
-- Ensure AWS CLI is installed on Jenkins agent
-- Verify Jenkins has AWS credentials configured
-- Check that Docker daemon is running
+### Docker build or push fails
 
-### Lambda Not Triggering
-- Verify EventBridge rule is enabled
-- Check CloudWatch logs for Lambda errors
-- Ensure Lambda has EventBridge invoke permission
+- Check that Docker is installed and the daemon is running on the Jenkins host.
+- If Jenkins cannot talk to Docker, add the `jenkins` user to the `docker` group and restart the service.
+- If `scripts/ecr_login.sh` returns a permission error, either run it with `bash ./scripts/ecr_login.sh` or mark it executable with `chmod +x`.
 
-### Docker Build Fails
-- Ensure Docker is installed and running
-- Check Dockerfile syntax
-- Verify app/requirements.txt dependencies
+### Lambda runs but no notification or DynamoDB item appears
+
+- Review CloudWatch logs for the `ecr-push-handler` function.
+- Confirm the Lambda environment variables `SNS_TOPIC_ARN` and `DYNAMODB_TABLE` are set.
+- Verify the Lambda execution role can publish to SNS and write to DynamoDB.
+
+### SNS email is not received
+
+- Confirm the email subscription is in `Confirmed` status in Amazon SNS.
+- Check the spam folder for the confirmation and notification emails.
+- Make sure Lambda is invoking `sns.publish` successfully in CloudWatch logs.
+
+### Lambda receives unexpected ECR events
+
+- Amazon ECR can emit untagged OCI artifact events alongside the tagged image push.
+- The current Lambda handler safely skips events that do not include `image-tag`.
+
+## Repository Layout
+
+```text
+devops-ecr-pipeline/
+|-- app/
+|   |-- app.py
+|   |-- Dockerfile
+|   `-- requirements.txt
+|-- docs/
+|   `-- screenshots/
+|       `-- README.md
+|-- jenkins/
+|   `-- Jenkinsfile
+|-- lambda/
+|   |-- build.sh
+|   |-- lambda_function.py
+|   `-- requirements.txt
+|-- scripts/
+|   |-- deploy.sh
+|   |-- ecr_login.sh
+|   `-- run_app.sh
+|-- terraform/
+|   |-- main.tf
+|   |-- outputs.tf
+|   |-- provider.tf
+|   `-- variables.tf
+`-- README.md
+```
 
 ## Cleanup
-
-To destroy all resources:
 
 ```bash
 cd terraform
 terraform destroy
 ```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes and test
-4. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License.
->>>>>>> 5640132 (Initialize automated ECR deployment pipeline project)
